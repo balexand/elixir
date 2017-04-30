@@ -239,13 +239,7 @@ defmodule Integer do
     raise ArgumentError, "invalid base #{inspect base}"
   end
 
-  def parse(<<?-, rest::binary>>, base) do
-    with {int, rem} <- parse_digits(rest, base), do: {-int, rem}
-  end
-  def parse(<<?+, rest::binary>>, base), do: parse_digits(rest, base)
-  def parse(<<rest::binary>>, base), do: parse_digits(rest, base)
-
-  defp parse_digits(<<rest::binary>>, base) do
+  def parse(<<rest::binary>>, base) do
     case count_digits(rest, base, 0) do
       0 -> :error
       n ->
@@ -257,6 +251,16 @@ defmodule Integer do
   digits = [{?0..?9, -?0}, {?A..?Z, 10 - ?A}, {?a..?z, 10 - ?a}]
 
   for {chars, diff} <- digits, char <- chars do
+    defp count_digits(<<?+, unquote(char), rest::binary>>, base, 0)
+         when base > unquote(char + diff) do
+      count_digits(rest, base, 2)
+    end
+
+    defp count_digits(<<?-, unquote(char), rest::binary>>, base, 0)
+         when base > unquote(char + diff) do
+      count_digits(rest, base, 2)
+    end
+
     defp count_digits(<<unquote(char), rest::binary>>, base, count)
          when base > unquote(char + diff) do
       count_digits(rest, base, count + 1)

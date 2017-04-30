@@ -54,6 +54,13 @@ defmodule StringIOTest do
     assert contents(pid) == {"", ""}
   end
 
+  test "IO.read :line with UTF-8" do
+    pid = start("⼊\n")
+    assert IO.read(pid, :line) == "⼊\n"
+    assert IO.read(pid, :line) == :eof
+    assert contents(pid) == {"", ""}
+  end
+
   test "IO.read :line with invalid UTF-8" do
     pid = start(<<130, 227, 129, 132, 227, 129, 134>>)
     assert IO.read(pid, :line) == {:error, :collect_line}
@@ -80,6 +87,13 @@ defmodule StringIOTest do
     pid = start(<<130, 227, 129, 132, 227, 129, 134>>)
     assert IO.read(pid, 2) == {:error, :invalid_unicode}
     assert contents(pid) == {<<130, 227, 129, 132, 227, 129, 134>>, ""}
+  end
+
+  test "IO.binread :line with Latin1 character" do
+    pid = start(<<181,?\n>>)
+    assert IO.binread(pid, :line) == "µ\n"
+    assert IO.binread(pid, :line) == :eof
+    assert contents(pid) == {"", ""}
   end
 
   test "IO.binread :line with \\n" do

@@ -263,85 +263,54 @@ defmodule StringIO do
 
   ## get_line
 
-  defp get_line(encoding, prompt,
-                %{input: input, output: output, capture_prompt: capture_prompt} = s) do
-    case :unicode.characters_to_list(input, encoding) do
-      {:error, _, _} ->
-        {{:error, :collect_line}, s}
-      {:incomplete, _, _} ->
-        {{:error, :collect_line}, s}
-      chars ->
-        {result, input} = do_get_line(chars, encoding)
-
-        s =
-          if capture_prompt do
-            %{s | output: <<output::binary, IO.chardata_to_string(prompt)::binary>>}
-          else
-            s
-          end
-
-        {result, %{s | input: input}}
+  defp get_line(encoding, prompt, %{input: input} = s) do
+    with {raw, input} <- collect_line(input, encoding, ""),
+         {:ok, result} <- decode(raw, encoding) do
+      {get_line_result(result), %{s | input: input} |> capture_prompt(prompt, 1)}
+    else
+      _ -> {{:error, :collect_line}, s}
     end
   end
 
-  defp do_get_line('', _encoding) do
-    {:eof, ""}
-  end
-
-  defp do_get_line(chars, encoding) do
-    {line, rest} = collect_line(chars)
-    {:unicode.characters_to_binary(line, encoding),
-      :unicode.characters_to_binary(rest, encoding)}
-  end
+  defp get_line_result(""), do: :eof
+  defp get_line_result(result), do: result
 
   ## get_until
 
-  defp get_until(encoding, prompt, mod, fun, args,
-                 %{input: input, output: output, capture_prompt: capture_prompt} = s) do
-    case :unicode.characters_to_list(input, encoding) do
-      {:error, _, _} ->
-        {:error, s}
-      {:incomplete, _, _} ->
-        {:error, s}
-      chars ->
-        {result, input, count} = do_get_until(chars, encoding, mod, fun, args)
+  defp get_until(encoding, prompt, mod, fun, args, %{input: input} = s) do
+    with {raw, input, count} <- do_get_until(input, encoding, mod, fun, args),
+         {:ok, result} <- decode(raw, encoding) do
+      input =
+        case input do
+          :eof -> ""
+          _ -> to_string(input)
+        end
 
-        input =
-          case input do
-            :eof -> ""
-            _ -> :unicode.characters_to_binary(input, encoding)
-          end
-
-        s =
-          if capture_prompt do
-            %{s | output: <<output::binary, :binary.copy(IO.chardata_to_string(prompt), count)::binary>>}
-          else
-            s
-          end
-
-        {result, %{s | input: input}}
+      {result, %{s | input: input} |> capture_prompt(prompt, count)}
+    else
+      _ -> {:error, s}
     end
   end
 
   defp do_get_until(chars, encoding, mod, fun, args, continuation \\ [], count \\ 0)
 
-  defp do_get_until('', encoding, mod, fun, args, continuation, count) do
+  defp do_get_until("", encoding, mod, fun, args, continuation, count) do
     case apply(mod, fun, [continuation, :eof | args]) do
       {:done, result, rest} ->
         {result, rest, count + 1}
       {:more, next_continuation} ->
-        do_get_until('', encoding, mod, fun, args, next_continuation, count + 1)
+        do_get_until("", encoding, mod, fun, args, next_continuation, count + 1)
     end
   end
 
   defp do_get_until(chars, encoding, mod, fun, args, continuation, count) do
-    {line, rest} = collect_line(chars)
+    {line, rest} = collect_line(chars, encoding, "")
 
-    case apply(mod, fun, [continuation, line | args]) do
+    case apply(mod, fun, [continuation, to_charlist(line) | args]) do
       {:done, result, :eof} ->
-        {result, rest, count + 1}
+        {result, to_charlist(rest), count + 1}
       {:done, result, extra} ->
-        {result, extra ++ rest, count + 1}
+        {result, extra ++ to_charlist(rest), count + 1}
       {:more, next_continuation} ->
         do_get_until(rest, encoding, mod, fun, args, next_continuation, count + 1)
     end
@@ -359,24 +328,34 @@ defmodule StringIO do
 
   ## helpers
 
-  defp collect_line(chars) do
-    collect_line(chars, [])
+  defp capture_prompt(%{capture_prompt: false} = s, _prompt, _count), do: s
+  defp capture_prompt(%{capture_prompt: true, output: output} = s, prompt, count) do
+    %{s | output: <<output::binary, :binary.copy(IO.chardata_to_string(prompt), count)::binary>>}
   end
 
-  defp collect_line([], stack) do
-    {:lists.reverse(stack), []}
+  defp collect_line(<<input::binary>>, :unicode, acc), do: collect_line(input, :utf8, acc)
+
+  defp collect_line("", _, acc), do: {acc, ""}
+  defp collect_line(<<"\r\n"::binary, tail::binary>>, _, acc), do: {<<acc::binary, "\n">>, tail}
+  defp collect_line(<<"\n"::binary, tail::binary>>, _, acc), do: {<<acc::binary, "\n">>, tail}
+
+  defp collect_line(<<head::utf8, tail::binary>>, :utf8, acc) do
+    collect_line(tail, :utf8, <<acc::binary, head::utf8 >>)
   end
 
-  defp collect_line([?\r, ?\n | rest], stack) do
-    {:lists.reverse([?\n | stack]), rest}
+  defp collect_line(<<_::binary>>, :utf8, _), do: :error
+
+  defp collect_line(<<head::bytes-size(1), tail::binary>>, encoding, acc) do
+    collect_line(tail, encoding, <<acc::binary, head::binary >>)
   end
 
-  defp collect_line([?\n | rest], stack) do
-    {:lists.reverse([?\n | stack]), rest}
-  end
-
-  defp collect_line([h | t], stack) do
-    collect_line(t, [h | stack])
+  defp decode(:eof, _), do: {:ok, :eof}
+  defp decode(binary, encoding) do
+    case :unicode.characters_to_binary(binary, encoding) do
+      {:error, _, _} -> :error
+      {:incomplete, _, _} -> :error
+      decoded -> {:ok, decoded}
+    end
   end
 
   defp io_reply(from, reply_as, reply) do
